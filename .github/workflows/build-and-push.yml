@@ -8,42 +8,63 @@ on:
     paths:
       - '**'
   workflow_dispatch:
+  pull_request:
 
 env:
-  ACR_NAME: fortytwoiam
-  IMAGE_NAME: iam-orchestrator
+  REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'fortytwoiam.azurecr.io' }}
+  IMAGE_NAME: ${{ vars.ORCHESTRATOR_IMAGE || format('{0}/{1}/iam-orchestrator', vars.CONTAINER_REGISTRY || 'fortytwoiam.azurecr.io', github.repository) }}
   
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
+    - name: Checkout
       uses: actions/checkout@v4
       
-    - name: Log in to Azure Container Registry
-      uses: azure/docker-login@v1
-      with:
-        login-server: ${{ env.ACR_NAME }}.azurecr.io
-        username: ${{ secrets.ACR_USERNAME }}
-        password: ${{ secrets.ACR_PASSWORD }}
-        
-    - name: Get Git commit SHA (short)
-      id: git-sha
-      run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
       
-    - name: Build and push Docker image
+    - name: Log in to ACR
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.ACR_USERNAME || secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.ACR_PASSWORD || secrets.REGISTRY_PASSWORD }}
+        
+    - name: Compute image tags
+      id: tags
+      shell: bash
       run: |
-        docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest \
-                     -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.git-sha.outputs.sha_short }} \
-                     .
-        docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
-        docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.git-sha.outputs.sha_short }}
+        set -euo pipefail
+        image="${IMAGE_NAME}"
+        tags="${image}:${GITHUB_SHA}"
+        if [ "${GITHUB_REF_NAME}" = "main" ]; then
+          tags="${tags}\n${image}:latest"
+        fi
+        {
+          echo 'tags<<EOF'
+          echo -e "${tags}"
+          echo 'EOF'
+          echo "image=${image}";
+        } >> "$GITHUB_OUTPUT"
+        
+    - name: Build (and push) orchestrator image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: Dockerfile
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.tags.outputs.tags }}
         
     - name: Summary
+      if: github.event_name != 'pull_request'
       run: |
         echo "✅ Image pushed successfully!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Images:**" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.git-sha.outputs.sha_short }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ steps.tags.outputs.image }}:${GITHUB_SHA}\`" >> $GITHUB_STEP_SUMMARY
+        if [ "${GITHUB_REF_NAME}" = "main" ]; then
+          echo "- \`${{ steps.tags.outputs.image }}:latest\`" >> $GITHUB_STEP_SUMMARY
+        fi
