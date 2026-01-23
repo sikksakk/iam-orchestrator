@@ -171,10 +171,42 @@ public class OrchestratorWorker : BackgroundService
             await _apiClient.UpdateJobStatusAsync(job.Id, JobStatus.Running);
             await SendLogAsync(job.Id, $"Job execution started", Models.LogLevel.Info);
 
-            // Execute the container
-            var success = await _containerExecutor.ExecuteJobAsync(job, 
+            // Download certificate for customer if customer is specified
+            byte[]? certificatePfx = null;
+            string? certificatePassword = null;
+            
+            if (!string.IsNullOrEmpty(job.Customer))
+            {
+                _logger.LogInformation("Downloading certificate for customer: {Customer}", job.Customer);
+                var certificate = await _apiClient.GetCertificateAsync(job.Customer);
+                
+                if (certificate != null)
+                {
+                    certificatePfx = Convert.FromBase64String(certificate.CertificateData);
+                    certificatePassword = certificate.Password;
+                    
+                    await SendLogAsync(job.Id, 
+                        $"Certificate acquired for {job.Customer} (expires: {certificate.ExpiresAt:yyyy-MM-dd HH:mm:ss} UTC)", 
+                        Models.LogLevel.Info);
+                    
+                    _logger.LogInformation("Certificate downloaded - Thumbprint: {Thumbprint}, Expires: {ExpiresAt}", 
+                        certificate.Thumbprint, certificate.ExpiresAt);
+                }
+                else
+                {
+                    await SendLogAsync(job.Id, 
+                        $"Warning: Could not obtain certificate for {job.Customer}", 
+                        Models.LogLevel.Warning);
+                }
+            }
+
+            // Execute the container with certificate
+            var success = await _containerExecutor.ExecuteJobAsync(
+                job, 
                 async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "orchestrator"),
-                async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "container"));
+                async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "container"),
+                certificatePfx,
+                certificatePassword);
 
             // Update final status
             var finalStatus = success ? JobStatus.Completed : JobStatus.Failed;

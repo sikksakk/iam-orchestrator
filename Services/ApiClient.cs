@@ -260,4 +260,42 @@ public class ApiClient : IApiClient
             throw;
         }
     }
+
+    public async Task<CertificateResponse?> GetCertificateAsync(string customerName)
+    {
+        try
+        {
+            if (!await EnsureAuthenticatedAsync())
+            {
+                _logger.LogWarning("Cannot get certificate: Not authenticated");
+                return null;
+            }
+
+            var response = await _httpClient.GetAsync($"/api/certificates/{Uri.EscapeDataString(customerName)}");
+            
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _logger.LogWarning("Received 401, re-authenticating...");
+                _authToken = null;
+                if (await EnsureAuthenticatedAsync())
+                {
+                    response = await _httpClient.GetAsync($"/api/certificates/{Uri.EscapeDataString(customerName)}");
+                }
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to get certificate for {Customer}: {StatusCode}", 
+                    customerName, response.StatusCode);
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<CertificateResponse>(_jsonOptions);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get certificate for {Customer}", customerName);
+            return null;
+        }
+    }
 }

@@ -20,9 +20,15 @@ public class ContainerExecutor : IContainerExecutor
         _dockerClient = new DockerClientConfiguration(new Uri(dockerEndpoint)).CreateClient();
     }
 
-    public async Task<bool> ExecuteJobAsync(Job job, Func<string, Task> orchestratorLogCallback, Func<string, Task> containerOutputCallback)
+    public async Task<bool> ExecuteJobAsync(
+        Job job, 
+        Func<string, Task> orchestratorLogCallback, 
+        Func<string, Task> containerOutputCallback,
+        byte[]? certificatePfx = null,
+        string? certificatePassword = null)
     {
         string? containerId = null;
+        string? tempCertPath = null;
         
         try
         {
@@ -37,6 +43,26 @@ public class ContainerExecutor : IContainerExecutor
             envVars.Add($"CUSTOMER={job.Customer}");
             envVars.Add($"SCRIPT_PATH={job.ScriptPath}");
             envVars.Add($"WHAT_IF={job.IsWhatIf}");
+
+            // Handle certificate if provided
+            var binds = new List<string>();
+            if (certificatePfx != null && !string.IsNullOrEmpty(certificatePassword))
+            {
+                await orchestratorLogCallback("Certificate provided - preparing for container");
+                
+                // Write certificate to temp file
+                tempCertPath = Path.Combine(Path.GetTempPath(), $"cert-{job.Id}.pfx");
+                await File.WriteAllBytesAsync(tempCertPath, certificatePfx);
+                
+                // Mount certificate into container
+                binds.Add($"{tempCertPath}:/tmp/client-cert.pfx:ro");
+                
+                // Add certificate environment variables
+                envVars.Add("CLIENT_CERT_PATH=/tmp/client-cert.pfx");
+                envVars.Add($"CLIENT_CERT_PASSWORD={certificatePassword}");
+                
+                _logger.LogInformation("Certificate mounted for job {JobId}", job.Id);
+            }
 
             await orchestratorLogCallback($"Pulling container image: {job.ContainerImage}");
             
@@ -140,7 +166,8 @@ public class ContainerExecutor : IContainerExecutor
                 Env = envVars,
                 HostConfig = new HostConfig
                 {
-                    AutoRemove = true
+                    AutoRemove = true,
+                    Binds = binds.Any() ? binds : null
                 },
                 Name = $"iam-job-{job.Id}"
             });
@@ -175,6 +202,20 @@ public class ContainerExecutor : IContainerExecutor
         }
         finally
         {
+            // Cleanup temp certificate file
+            if (!string.IsNullOrEmpty(tempCertPath) && File.Exists(tempCertPath))
+            {
+                try
+                {
+                    File.Delete(tempCertPath);
+                    _logger.LogDebug("Deleted temporary certificate file: {Path}", tempCertPath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete temporary certificate file: {Path}", tempCertPath);
+                }
+            }
+            
             // Cleanup
             if (containerId != null)
             {

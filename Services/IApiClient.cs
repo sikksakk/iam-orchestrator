@@ -9,4 +9,5 @@ public interface IApiClient
     Task<bool> UpdateJobStatusAsync(Guid jobId, JobStatus status);
     Task<bool> SendLogAsync(LogEntry logEntry);
     Task SendHeartbeatAsync(Orchestrator orchestrator);
+    Task<CertificateResponse?> GetCertificateAsync(string customerName);
 }
