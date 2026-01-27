@@ -102,16 +102,31 @@ public class ContainerExecutor : IContainerExecutor
             
             try
             {
+                // Parse image name properly - ensure registry server is included
+                var fullImageName = job.ContainerImage;
+                string fromImage;
+                string tag;
+                
+                if (fullImageName.Contains(':'))
+                {
+                    var parts = fullImageName.Split(':');
+                    fromImage = parts[0];
+                    tag = parts[1];
+                }
+                else
+                {
+                    fromImage = fullImageName;
+                    tag = "latest";
+                }
+                
                 _logger.LogDebug("Calling Docker API CreateImageAsync - FromImage: '{FromImage}', Tag: '{Tag}', AuthConfig: {HasAuth}", 
-                    job.ContainerImage.Split(':')[0], 
-                    job.ContainerImage.Contains(':') ? job.ContainerImage.Split(':')[1] : "latest",
-                    authConfig != null ? "YES" : "NO");
+                    fromImage, tag, authConfig != null ? "YES" : "NO");
                 
                 await _dockerClient.Images.CreateImageAsync(
                     new ImagesCreateParameters
                     {
-                        FromImage = job.ContainerImage.Split(':')[0],
-                        Tag = job.ContainerImage.Contains(':') ? job.ContainerImage.Split(':')[1] : "latest"
+                        FromImage = fromImage,
+                        Tag = tag
                     },
                     authConfig,
                     new Progress<JSONMessage>(message =>
