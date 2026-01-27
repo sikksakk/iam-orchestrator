@@ -103,7 +103,14 @@ public class ContainerExecutor : IContainerExecutor
             try
             {
                 // Parse image name properly - ensure registry server is included
-                var fullImageName = job.ContainerImage;
+                var fullImageName = job.ContainerImage.TrimStart('/');
+                
+                // If registry server is provided and not already in the image name, prepend it
+                if (!string.IsNullOrEmpty(job.RegistryServer) && !fullImageName.StartsWith(job.RegistryServer))
+                {
+                    fullImageName = $"{job.RegistryServer}/{fullImageName}";
+                }
+                
                 string fromImage;
                 string tag;
                 
