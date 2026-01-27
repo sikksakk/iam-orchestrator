@@ -103,7 +103,7 @@ public class OrchestratorWorker : BackgroundService
             if (pendingJobs.Any())
             {
                 var customerInfo = string.IsNullOrEmpty(_customerName) ? "all customers" : $"customer '{_customerName}'";
-                _logger.LogDebug("Found {Count} pending jobs for {Customer}", pendingJobs.Count, customerInfo);
+                _logger.LogInformation("Found {Count} pending jobs for {Customer}", pendingJobs.Count, customerInfo);
             }
 
             foreach (var job in pendingJobs)
