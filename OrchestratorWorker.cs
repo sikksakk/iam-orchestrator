@@ -215,7 +215,16 @@ public class OrchestratorWorker : BackgroundService
             var statusMessage = success ? "Job completed successfully" : "Job failed";
             await SendLogAsync(job.Id, statusMessage, success ? Models.LogLevel.Info : Models.LogLevel.Error);
             
-            _logger.LogDebug("Job {JobId} finished with status: {Status}", job.Id, finalStatus);
+            if (success)
+            {
+                _logger.LogInformation("✓ Job {JobId} ({JobName}) completed successfully for customer {Customer}", 
+                    job.Id, job.Name, job.Customer);
+            }
+            else
+            {
+                _logger.LogError("✗ Job {JobId} ({JobName}) failed for customer {Customer}", 
+                    job.Id, job.Name, job.Customer);
+            }
         }
         catch (Exception ex)
         {

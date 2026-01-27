@@ -251,6 +251,11 @@ public class ContainerExecutor : IContainerExecutor
                         Force = true
                     });
                 }
+                catch (Docker.DotNet.DockerContainerNotFoundException)
+                {
+                    // Container already removed, this is fine
+                    _logger.LogDebug("Container {ContainerId} already removed", containerId);
+                }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to remove container {ContainerId}", containerId);
