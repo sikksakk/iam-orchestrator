@@ -100,17 +100,20 @@ public class ContainerExecutor : IContainerExecutor
                     !string.IsNullOrEmpty(job.RegistryUsername), !string.IsNullOrEmpty(job.RegistryPassword));
             }
             
+            // Parse image name properly - ensure registry server is included
+            var fullImageName = job.ContainerImage.TrimStart('/');
+            
+            // If registry server is provided and not already in the image name, prepend it
+            if (!string.IsNullOrEmpty(job.RegistryServer) && !fullImageName.StartsWith(job.RegistryServer))
+            {
+                fullImageName = $"{job.RegistryServer}/{fullImageName}";
+            }
+            
+            _logger.LogInformation("Using full image name: {FullImageName} (original: {OriginalImage})", 
+                fullImageName, job.ContainerImage);
+            
             try
             {
-                // Parse image name properly - ensure registry server is included
-                var fullImageName = job.ContainerImage.TrimStart('/');
-                
-                // If registry server is provided and not already in the image name, prepend it
-                if (!string.IsNullOrEmpty(job.RegistryServer) && !fullImageName.StartsWith(job.RegistryServer))
-                {
-                    fullImageName = $"{job.RegistryServer}/{fullImageName}";
-                }
-                
                 string fromImage;
                 string tag;
                 
@@ -149,12 +152,12 @@ public class ContainerExecutor : IContainerExecutor
                     }));
                 
                 await orchestratorLogCallback("Image pull completed successfully");
-                _logger.LogDebug("Successfully pulled image {Image}", job.ContainerImage);
+                _logger.LogDebug("Successfully pulled image {Image}", fullImageName);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to pull image {Image}. Exception type: {ExceptionType}", 
-                    job.ContainerImage, ex.GetType().Name);
+                    fullImageName, ex.GetType().Name);
                 await orchestratorLogCallback($"ERROR: Failed to pull image: {ex.Message}");
                 
                 if (ex.Message.Contains("unauthorized") || ex.Message.Contains("UNAUTHORIZED"))
@@ -163,28 +166,28 @@ public class ContainerExecutor : IContainerExecutor
                     await orchestratorLogCallback("AUTHENTICATION FAILED - Check registry username and password");
                 }
                 
-                // Check if image exists locally
+                // Check if image exists locally using the full image name
                 try
                 {
-                    await _dockerClient.Images.InspectImageAsync(job.ContainerImage);
+                    await _dockerClient.Images.InspectImageAsync(fullImageName);
                     await orchestratorLogCallback("Image exists locally, will attempt to use it");
-                    _logger.LogWarning("Using existing local image {Image} after pull failure", job.ContainerImage);
+                    _logger.LogWarning("Using existing local image {Image} after pull failure", fullImageName);
                 }
                 catch
                 {
                     await orchestratorLogCallback("ERROR: Image does not exist locally and pull failed");
                     throw new InvalidOperationException(
-                        $"Failed to pull image '{job.ContainerImage}' and it does not exist locally. " +
+                        $"Failed to pull image '{fullImageName}' and it does not exist locally. " +
                         $"Error: {ex.Message}", ex);
                 }
             }
 
             await orchestratorLogCallback("Creating container...");
 
-            // Create container
+            // Create container using the full image name
             var createResponse = await _dockerClient.Containers.CreateContainerAsync(new CreateContainerParameters
             {
-                Image = job.ContainerImage,
+                Image = fullImageName,
                 Env = envVars,
                 HostConfig = new HostConfig
                 {
