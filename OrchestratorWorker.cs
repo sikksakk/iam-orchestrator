@@ -52,6 +52,13 @@ public class OrchestratorWorker : BackgroundService
                 // Send heartbeat
                 await SendHeartbeatAsync();
                 
+                // Check for update request
+                if (await CheckForUpdateAsync())
+                {
+                    _logger.LogInformation("Update requested - orchestrator will exit to allow restart");
+                    break; // Exit the loop to allow the orchestrator to be restarted
+                }
+                
                 // Process jobs
                 await ProcessJobsAsync(stoppingToken);
 
@@ -70,6 +77,26 @@ public class OrchestratorWorker : BackgroundService
         }
 
         _logger.LogInformation("Orchestrator Worker stopping...");
+    }
+
+    private async Task<bool> CheckForUpdateAsync()
+    {
+        try
+        {
+            var pendingUpdate = await _apiClient.CheckForUpdateAsync(_orchestratorId);
+            if (pendingUpdate)
+            {
+                _logger.LogInformation("Pending update detected for orchestrator {OrchestratorId}", _orchestratorId);
+                await _apiClient.AcknowledgeUpdateAsync(_orchestratorId);
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to check for updates");
+            return false;
+        }
     }
 
     private async Task SendHeartbeatAsync()

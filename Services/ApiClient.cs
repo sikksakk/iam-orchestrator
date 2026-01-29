@@ -298,4 +298,52 @@ public class ApiClient : IApiClient
             return null;
         }
     }
+
+    public async Task<bool> CheckForUpdateAsync(string orchestratorId)
+    {
+        try
+        {
+            if (!await EnsureAuthenticatedAsync())
+            {
+                return false;
+            }
+
+            var response = await _httpClient.GetAsync($"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-status");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<UpdateStatusResponse>(_jsonOptions);
+                return result?.PendingUpdate ?? false;
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to check for update");
+            return false;
+        }
+    }
+
+    public async Task AcknowledgeUpdateAsync(string orchestratorId)
+    {
+        try
+        {
+            if (!await EnsureAuthenticatedAsync())
+            {
+                return;
+            }
+
+            await _httpClient.PostAsync($"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-ack", null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to acknowledge update");
+        }
+    }
+}
+
+public class UpdateStatusResponse
+{
+    public bool PendingUpdate { get; set; }
 }
