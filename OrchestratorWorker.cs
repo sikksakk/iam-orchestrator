@@ -8,7 +8,6 @@ public class OrchestratorWorker : BackgroundService
     private readonly ILogger<OrchestratorWorker> _logger;
     private readonly IApiClient _apiClient;
     private readonly IContainerExecutor _containerExecutor;
-    private readonly IJobScheduler _jobScheduler;
     private readonly IConfiguration _configuration;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly HashSet<Guid> _processedOneOffJobs = new();
@@ -20,14 +19,12 @@ public class OrchestratorWorker : BackgroundService
         ILogger<OrchestratorWorker> logger,
         IApiClient apiClient,
         IContainerExecutor containerExecutor,
-        IJobScheduler jobScheduler,
         IConfiguration configuration,
         IHostApplicationLifetime lifetime)
     {
         _logger = logger;
         _apiClient = apiClient;
         _containerExecutor = containerExecutor;
-        _jobScheduler = jobScheduler;
         _configuration = configuration;
         _lifetime = lifetime;
         _customerName = configuration["CustomerSettings:CustomerName"];
@@ -159,34 +156,15 @@ public class OrchestratorWorker : BackgroundService
     {
         try
         {
-            if (job.JobType == JobType.Scheduled)
+            // All jobs are treated as one-off executions
+            // The API is responsible for scheduling and resetting jobs to Pending when they should run
+            if (!_processedOneOffJobs.Contains(job.Id))
             {
-                // Handle scheduled jobs
-                if (!_jobScheduler.IsJobScheduled(job.Id))
-                {
-                    _logger.LogInformation("Scheduling job {JobId} ({JobName}) with schedule: {Schedule}", 
-                        job.Id, job.Name, job.Schedule);
-                    
-                    _jobScheduler.ScheduleJob(job, async () => await ExecuteJobAsync(job));
-                    
-                    await SendLogAsync(job.Id, $"Job scheduled with cron expression: {job.Schedule}", Models.LogLevel.Info);
-                }
-                else if (job.IsPaused)
-                {
-                    _logger.LogDebug("Job {JobId} is paused", job.Id);
-                }
-            }
-            else // OneOff
-            {
-                // Execute one-off jobs immediately (only once)
-                if (!_processedOneOffJobs.Contains(job.Id))
-                {
-                    _processedOneOffJobs.Add(job.Id);
-                    _logger.LogInformation("Executing one-off job {JobId} ({JobName})", job.Id, job.Name);
-                    
-                    // Execute in background so we don't block polling
-                    _ = Task.Run(async () => await ExecuteJobAsync(job), stoppingToken);
-                }
+                _processedOneOffJobs.Add(job.Id);
+                _logger.LogInformation("Executing job {JobId} ({JobName})", job.Id, job.Name);
+                
+                // Execute in background so we don't block polling
+                _ = Task.Run(async () => await ExecuteJobAsync(job), stoppingToken);
             }
         }
         catch (Exception ex)
