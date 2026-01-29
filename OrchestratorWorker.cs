@@ -10,6 +10,7 @@ public class OrchestratorWorker : BackgroundService
     private readonly IContainerExecutor _containerExecutor;
     private readonly IJobScheduler _jobScheduler;
     private readonly IConfiguration _configuration;
+    private readonly IHostApplicationLifetime _lifetime;
     private readonly HashSet<Guid> _processedOneOffJobs = new();
     private readonly string? _customerName;
     private readonly string _orchestratorId;
@@ -20,13 +21,15 @@ public class OrchestratorWorker : BackgroundService
         IApiClient apiClient,
         IContainerExecutor containerExecutor,
         IJobScheduler jobScheduler,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostApplicationLifetime lifetime)
     {
         _logger = logger;
         _apiClient = apiClient;
         _containerExecutor = containerExecutor;
         _jobScheduler = jobScheduler;
         _configuration = configuration;
+        _lifetime = lifetime;
         _customerName = configuration["CustomerSettings:CustomerName"];
         _hostName = Environment.MachineName;
         _orchestratorId = $"{_hostName}-{Guid.NewGuid().ToString()[..8]}";
@@ -56,7 +59,9 @@ public class OrchestratorWorker : BackgroundService
                 if (await CheckForUpdateAsync())
                 {
                     _logger.LogInformation("Update requested - orchestrator will exit to allow restart");
-                    break; // Exit the loop to allow the orchestrator to be restarted
+                    // Request graceful application shutdown - container platform will restart us
+                    _lifetime.StopApplication();
+                    return;
                 }
                 
                 // Process jobs
