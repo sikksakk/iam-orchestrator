@@ -305,15 +305,28 @@ public class ApiClient : IApiClient
         {
             if (!await EnsureAuthenticatedAsync())
             {
+                _logger.LogWarning("Cannot check for update: Not authenticated");
                 return false;
             }
 
-            var response = await _httpClient.GetAsync($"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-status");
+            var url = $"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-status";
+            _logger.LogDebug("Checking update status at: {Url}", url);
+            
+            var response = await _httpClient.GetAsync(url);
+            _logger.LogDebug("Update status response: {StatusCode}", response.StatusCode);
             
             if (response.IsSuccessStatusCode)
             {
+                var content = await response.Content.ReadAsStringAsync();
+                _logger.LogDebug("Update status response body: {Content}", content);
+                
                 var result = await response.Content.ReadFromJsonAsync<UpdateStatusResponse>(_jsonOptions);
+                _logger.LogDebug("Parsed pendingUpdate value: {PendingUpdate}", result?.PendingUpdate);
                 return result?.PendingUpdate ?? false;
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogDebug("Orchestrator {OrchestratorId} not found in API", orchestratorId);
             }
             
             return false;
@@ -345,5 +358,6 @@ public class ApiClient : IApiClient
 
 public class UpdateStatusResponse
 {
+    [System.Text.Json.Serialization.JsonPropertyName("pendingUpdate")]
     public bool PendingUpdate { get; set; }
 }

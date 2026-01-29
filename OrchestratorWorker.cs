@@ -83,7 +83,10 @@ public class OrchestratorWorker : BackgroundService
     {
         try
         {
+            _logger.LogDebug("Checking for updates for orchestrator {OrchestratorId}...", _orchestratorId);
             var pendingUpdate = await _apiClient.CheckForUpdateAsync(_orchestratorId);
+            _logger.LogDebug("Update check result for {OrchestratorId}: pendingUpdate={PendingUpdate}", _orchestratorId, pendingUpdate);
+            
             if (pendingUpdate)
             {
                 _logger.LogInformation("Pending update detected for orchestrator {OrchestratorId}", _orchestratorId);
@@ -94,7 +97,7 @@ public class OrchestratorWorker : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to check for updates");
+            _logger.LogWarning(ex, "Failed to check for updates for orchestrator {OrchestratorId}", _orchestratorId);
             return false;
         }
     }
