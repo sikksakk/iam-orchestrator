@@ -1,6 +1,6 @@
 namespace IamOrchestrator.Models;
 
-public class LogEntry
+public sealed class LogEntry
 {
     public Guid JobId { get; set; }
     public string Message { get; set; } = string.Empty;

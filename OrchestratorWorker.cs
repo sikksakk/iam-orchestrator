@@ -4,7 +4,7 @@ using IamOrchestrator.Services;
 
 namespace IamOrchestrator;
 
-public class OrchestratorWorker : BackgroundService
+public sealed class OrchestratorWorker : BackgroundService
 {
     private readonly ILogger<OrchestratorWorker> _logger;
     private readonly IApiClient _apiClient;

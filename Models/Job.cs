@@ -1,6 +1,6 @@
 namespace IamOrchestrator.Models;
 
-public class Job
+public sealed class Job
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;

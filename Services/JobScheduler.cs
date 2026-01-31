@@ -4,7 +4,7 @@ using System.Collections.Concurrent;
 
 namespace IamOrchestrator.Services;
 
-public class JobScheduler : IJobScheduler
+public sealed class JobScheduler : IJobScheduler
 {
     private readonly ILogger<JobScheduler> _logger;
     private readonly ConcurrentDictionary<Guid, ScheduledJobInfo> _scheduledJobs = new();

@@ -5,7 +5,7 @@ using IamOrchestrator.Models;
 
 namespace IamOrchestrator.Services;
 
-public class ApiClient : IApiClient, IDisposable
+public sealed class ApiClient : IApiClient, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<ApiClient> _logger;

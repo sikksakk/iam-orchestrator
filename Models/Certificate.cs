@@ -1,6 +1,6 @@
 namespace IamOrchestrator.Models;
 
-public class CertificateResponse
+public sealed class CertificateResponse
 {
     public string CustomerName { get; set; } = string.Empty;
     public string CertificateData { get; set; } = string.Empty; // Base64 encoded PFX

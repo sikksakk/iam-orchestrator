@@ -1,12 +1,12 @@
 namespace IamOrchestrator.Models;
 
-public class LoginRequest
+public sealed class LoginRequest
 {
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
 }
 
-public class LoginResponse
+public sealed class LoginResponse
 {
     public string Token { get; set; } = string.Empty;
     public string Username { get; set; } = string.Empty;

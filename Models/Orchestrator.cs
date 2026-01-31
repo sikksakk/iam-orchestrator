@@ -1,6 +1,6 @@
 namespace IamOrchestrator.Models;
 
-public class Orchestrator
+public sealed class Orchestrator
 {
     public string Id { get; set; } = string.Empty;
     public string CustomerName { get; set; } = string.Empty;

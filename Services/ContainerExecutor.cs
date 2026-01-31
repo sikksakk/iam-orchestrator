@@ -5,7 +5,7 @@ using System.Text;
 
 namespace IamOrchestrator.Services;
 
-public class ContainerExecutor : IContainerExecutor, IDisposable
+public sealed class ContainerExecutor : IContainerExecutor, IDisposable
 {
     private readonly ILogger<ContainerExecutor> _logger;
     private readonly IConfiguration _configuration;
