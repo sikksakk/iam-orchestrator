@@ -256,35 +256,36 @@ public sealed class OrchestratorWorker : BackgroundService
         {
             _logger.LogDebug("Starting execution of job {JobId} ({JobName})", job.Id, job.Name);
             
-            // Update status to Running - this may regenerate ACR credentials on the API side
+            // Update status to Running - the API regenerates fresh ACR credentials when this happens
             await _apiClient.UpdateJobStatusAsync(job.Id, JobStatus.Running);
             await SendLogAsync(job.Id, $"Job execution started", Models.LogLevel.Info);
 
-            // Refresh the job to get updated ACR credentials (may have been regenerated for retried/scheduled jobs)
-            // Check if we have a registry server or ACR image but missing credentials - this indicates we need to fetch fresh creds
-            var needsCredentialRefresh = (string.IsNullOrEmpty(job.RegistryUsername) || string.IsNullOrEmpty(job.RegistryPassword)) &&
-                (!string.IsNullOrEmpty(job.RegistryServer) || 
-                 (!string.IsNullOrEmpty(job.ContainerImage) && job.ContainerImage.Contains(".azurecr.io", StringComparison.OrdinalIgnoreCase)));
-            
-            if (needsCredentialRefresh)
+            // ALWAYS refresh the job after updating to Running to get fresh ACR credentials
+            // The API regenerates credentials every time a job starts to ensure they're valid
+            if (!string.IsNullOrEmpty(job.RegistryServer) || 
+                (!string.IsNullOrEmpty(job.ContainerImage) && job.ContainerImage.Contains(".azurecr.io", StringComparison.OrdinalIgnoreCase)))
             {
-                _logger.LogInformation("Job {JobId} uses private registry but has missing credentials - refreshing job to get updated credentials", job.Id);
+                _logger.LogInformation("Job {JobId} uses ACR - fetching fresh credentials from API (current username: {Username})", 
+                    job.Id, job.RegistryUsername ?? "[NONE]");
+                    
                 var refreshedJob = await _apiClient.GetJobAsync(job.Id);
                 if (refreshedJob != null)
                 {
                     // Update credential fields from refreshed job
+                    var oldUsername = job.RegistryUsername;
                     job.RegistryUsername = refreshedJob.RegistryUsername;
                     job.RegistryPassword = refreshedJob.RegistryPassword;
                     job.RegistryServer = refreshedJob.RegistryServer;
                     
                     if (!string.IsNullOrEmpty(job.RegistryUsername))
                     {
-                        _logger.LogInformation("Refreshed ACR credentials for job {JobId}: username={Username}", job.Id, job.RegistryUsername);
-                        await SendLogAsync(job.Id, $"ACR credentials refreshed: {job.RegistryUsername}", Models.LogLevel.Info);
+                        _logger.LogInformation("Got fresh ACR credentials for job {JobId}: username changed from {OldUsername} to {NewUsername}", 
+                            job.Id, oldUsername ?? "[NONE]", job.RegistryUsername);
+                        await SendLogAsync(job.Id, $"Using fresh ACR credentials: {job.RegistryUsername}", Models.LogLevel.Info);
                     }
                     else
                     {
-                        _logger.LogWarning("Job {JobId} still has no ACR credentials after refresh", job.Id);
+                        _logger.LogWarning("Job {JobId} has no ACR credentials after refresh - may fail to pull image", job.Id);
                     }
                 }
                 else
