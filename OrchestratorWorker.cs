@@ -33,12 +33,10 @@ public class OrchestratorWorker : BackgroundService
         
         if (string.IsNullOrEmpty(_customerName))
         {
-            _logger.LogWarning("No customer name configured. This orchestrator will process jobs for ALL customers.");
+            throw new InvalidOperationException("CustomerSettings:CustomerName is required. Each orchestrator must handle a specific customer.");
         }
-        else
-        {
-            _logger.LogInformation("Orchestrator {OrchestratorId} configured for customer: {CustomerName}", _orchestratorId, _customerName);
-        }
+        
+        _logger.LogInformation("Orchestrator {OrchestratorId} configured for customer: {CustomerName}", _orchestratorId, _customerName);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -98,12 +96,13 @@ public class OrchestratorWorker : BackgroundService
     {
         try
         {
-            var pendingJobs = await _apiClient.GetPendingJobsAsync(_customerName);
+            // Customer name is guaranteed to be set (validated in constructor)
+            var pendingJobs = await _apiClient.GetPendingJobsAsync(_orchestratorId, _customerName!);
             
             if (pendingJobs.Any())
             {
-                var customerInfo = string.IsNullOrEmpty(_customerName) ? "all customers" : $"customer '{_customerName}'";
-                _logger.LogInformation("Found {Count} pending jobs for {Customer}", pendingJobs.Count, customerInfo);
+                _logger.LogInformation("Received {Count} job(s) for orchestrator {OrchestratorId} (customer: {Customer})",
+                    pendingJobs.Count, _orchestratorId, _customerName);
             }
 
             foreach (var job in pendingJobs)
@@ -124,6 +123,9 @@ public class OrchestratorWorker : BackgroundService
     {
         try
         {
+            // Log a nice banner with job details
+            LogJobReceivedBanner(job);
+            
             if (job.JobType == JobType.Scheduled)
             {
                 // Handle scheduled jobs
@@ -258,5 +260,48 @@ public class OrchestratorWorker : BackgroundService
     {
         _logger.LogInformation("Orchestrator Worker is stopping...");
         await base.StopAsync(stoppingToken);
+    }
+
+    private void LogJobReceivedBanner(Job job)
+    {
+        var separator = new string('═', 60);
+        var jobTypeIcon = job.JobType == JobType.Scheduled ? "🔄" : "▶️";
+        var whatIfIndicator = job.IsWhatIf ? " [WHAT-IF]" : "";
+        var pausedIndicator = job.IsPaused ? " [PAUSED]" : "";
+        
+        _logger.LogInformation("");
+        _logger.LogInformation("╔{Separator}╗", separator);
+        _logger.LogInformation("║  {Icon} JOB RECEIVED{WhatIf}{Paused}", jobTypeIcon, whatIfIndicator, pausedIndicator);
+        _logger.LogInformation("╠{Separator}╣", separator);
+        _logger.LogInformation("║  📋 Name:       {Name}", job.Name);
+        _logger.LogInformation("║  🔑 ID:         {Id}", job.Id);
+        _logger.LogInformation("║  👤 Customer:   {Customer}", job.Customer);
+        _logger.LogInformation("║  📦 Type:       {JobType}", job.JobType);
+        
+        if (job.JobType == JobType.Scheduled && !string.IsNullOrEmpty(job.Schedule))
+        {
+            _logger.LogInformation("║  ⏰ Schedule:   {Schedule}", job.Schedule);
+        }
+        
+        if (!string.IsNullOrEmpty(job.ScriptPath))
+        {
+            _logger.LogInformation("║  📜 Script:     {ScriptPath}", job.ScriptPath);
+        }
+        
+        if (!string.IsNullOrEmpty(job.ContainerImage))
+        {
+            _logger.LogInformation("║  🐳 Image:      {ContainerImage}", job.ContainerImage);
+        }
+        
+        if (job.Parameters.Any())
+        {
+            _logger.LogInformation("║  ⚙️  Parameters: {Count} defined", job.Parameters.Count);
+        }
+        
+        _logger.LogInformation("║  📅 Created:    {CreatedAt:yyyy-MM-dd HH:mm:ss} UTC", job.CreatedAt);
+        _logger.LogInformation("║  🎯 Status:     {Status}", job.Status);
+        _logger.LogInformation("║  🖥️  Assigned:   {OrchestratorId}", _orchestratorId);
+        _logger.LogInformation("╚{Separator}╝", separator);
+        _logger.LogInformation("");
     }
 }

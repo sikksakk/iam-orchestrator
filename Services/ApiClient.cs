@@ -91,7 +91,7 @@ public class ApiClient : IApiClient
         }
     }
 
-    public async Task<List<Job>> GetPendingJobsAsync(string? customer = null)
+    public async Task<List<Job>> GetPendingJobsAsync(string orchestratorId, string customer)
     {
         try
         {
@@ -101,11 +101,7 @@ public class ApiClient : IApiClient
                 return new List<Job>();
             }
 
-            var url = "/api/jobs/pending";
-            if (!string.IsNullOrEmpty(customer))
-            {
-                url += $"?customer={Uri.EscapeDataString(customer)}";
-            }
+            var url = $"/api/jobs/pending?orchestratorId={Uri.EscapeDataString(orchestratorId)}&customer={Uri.EscapeDataString(customer)}";
             
             var response = await _httpClient.GetAsync(url);
             

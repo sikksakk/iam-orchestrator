@@ -16,6 +16,7 @@ public class Job
     public bool IsPaused { get; set; }
     public string? Schedule { get; set; }
     public JobStatus Status { get; set; }
+    public string? AssignedToOrchestratorId { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
