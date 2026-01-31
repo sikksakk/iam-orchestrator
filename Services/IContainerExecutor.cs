@@ -9,7 +9,8 @@ public interface IContainerExecutor
         Func<string, Task> orchestratorLogCallback, 
         Func<string, Task> containerOutputCallback,
         byte[]? certificatePfx = null,
-        string? certificatePassword = null);
+        string? certificatePassword = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

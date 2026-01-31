@@ -103,7 +103,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task<List<Job>> GetPendingJobsAsync(string orchestratorId, string customer)
+    public async Task<List<Job>> GetPendingJobsAsync(string orchestratorId, string customer, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -115,7 +115,7 @@ public class ApiClient : IApiClient, IDisposable
 
             var url = $"/api/jobs/pending?orchestratorId={Uri.EscapeDataString(orchestratorId)}&customer={Uri.EscapeDataString(customer)}";
             
-            var response = await _httpClient.GetAsync(url);
+            var response = await _httpClient.GetAsync(url, cancellationToken);
             
             // Retry authentication if we get 401
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
@@ -140,7 +140,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task<Job?> GetJobAsync(Guid jobId)
+    public async Task<Job?> GetJobAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -150,7 +150,7 @@ public class ApiClient : IApiClient, IDisposable
                 return null;
             }
 
-            var response = await _httpClient.GetAsync($"/api/jobs/{jobId}");
+            var response = await _httpClient.GetAsync($"/api/jobs/{jobId}", cancellationToken);
             
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -176,7 +176,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task<bool> UpdateJobStatusAsync(Guid jobId, JobStatus status)
+    public async Task<bool> UpdateJobStatusAsync(Guid jobId, JobStatus status, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -207,7 +207,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task<bool> SendLogAsync(LogEntry logEntry)
+    public async Task<bool> SendLogAsync(LogEntry logEntry, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -217,7 +217,7 @@ public class ApiClient : IApiClient, IDisposable
                 return false;
             }
 
-            var response = await _httpClient.PostAsJsonAsync("/api/logs", logEntry, s_jsonOptions);
+            var response = await _httpClient.PostAsJsonAsync("/api/logs", logEntry, s_jsonOptions, cancellationToken);
             
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -238,7 +238,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task SendHeartbeatAsync(Orchestrator orchestrator)
+    public async Task SendHeartbeatAsync(Orchestrator orchestrator, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -248,7 +248,7 @@ public class ApiClient : IApiClient, IDisposable
                 return;
             }
 
-            var response = await _httpClient.PostAsJsonAsync("/api/orchestrators/heartbeat", orchestrator, s_jsonOptions);
+            var response = await _httpClient.PostAsJsonAsync("/api/orchestrators/heartbeat", orchestrator, s_jsonOptions, cancellationToken);
             
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -269,7 +269,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task<CertificateResponse?> GetCertificateAsync(string customerName)
+    public async Task<CertificateResponse?> GetCertificateAsync(string customerName, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -307,7 +307,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task<bool> CheckForUpdateAsync(string orchestratorId)
+    public async Task<bool> CheckForUpdateAsync(string orchestratorId, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -320,7 +320,7 @@ public class ApiClient : IApiClient, IDisposable
             var url = $"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-status";
             _logger.LogDebug("Checking update status at: {Url}", url);
             
-            var response = await _httpClient.GetAsync(url);
+            var response = await _httpClient.GetAsync(url, cancellationToken);
             _logger.LogDebug("Update status response: {StatusCode}", response.StatusCode);
             
             if (response.IsSuccessStatusCode)
@@ -346,7 +346,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task AcknowledgeUpdateAsync(string orchestratorId)
+    public async Task AcknowledgeUpdateAsync(string orchestratorId, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -355,7 +355,7 @@ public class ApiClient : IApiClient, IDisposable
                 return;
             }
 
-            await _httpClient.PostAsync($"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-ack", null);
+            await _httpClient.PostAsync($"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-ack", null, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -363,7 +363,7 @@ public class ApiClient : IApiClient, IDisposable
         }
     }
 
-    public async Task<Job?> RefreshCredentialsAsync(Guid jobId)
+    public async Task<Job?> RefreshCredentialsAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -375,7 +375,7 @@ public class ApiClient : IApiClient, IDisposable
 
             _logger.LogInformation("Requesting credential refresh for job {JobId}", jobId);
             
-            var response = await _httpClient.PostAsync($"/api/jobs/{jobId}/refresh-credentials", null);
+            var response = await _httpClient.PostAsync($"/api/jobs/{jobId}/refresh-credentials", null, cancellationToken);
             
             // Retry authentication if we get 401
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)

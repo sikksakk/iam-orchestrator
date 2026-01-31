@@ -36,7 +36,8 @@ public class ContainerExecutor : IContainerExecutor, IDisposable
         Func<string, Task> orchestratorLogCallback, 
         Func<string, Task> containerOutputCallback,
         byte[]? certificatePfx = null,
-        string? certificatePassword = null)
+        string? certificatePassword = null,
+        CancellationToken cancellationToken = default)
     {
         string? containerId = null;
         string? tempCertPath = null;
