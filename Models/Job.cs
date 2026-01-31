@@ -25,6 +25,7 @@ public class Job
 public enum JobStatus
 {
     Pending,
+    Scheduled,  // Waiting for scheduled time
     Running,
     Completed,
     Failed

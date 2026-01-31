@@ -10,4 +10,6 @@ public interface IApiClient
     Task<bool> SendLogAsync(LogEntry logEntry);
     Task SendHeartbeatAsync(Orchestrator orchestrator);
     Task<CertificateResponse?> GetCertificateAsync(string customerName);
+    Task<bool> CheckForUpdateAsync(string orchestratorId);
+    Task AcknowledgeUpdateAsync(string orchestratorId);
 }

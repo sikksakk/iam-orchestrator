@@ -294,4 +294,66 @@ public class ApiClient : IApiClient
             return null;
         }
     }
+
+    public async Task<bool> CheckForUpdateAsync(string orchestratorId)
+    {
+        try
+        {
+            if (!await EnsureAuthenticatedAsync())
+            {
+                _logger.LogWarning("Cannot check for update: Not authenticated");
+                return false;
+            }
+
+            var url = $"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-status";
+            _logger.LogDebug("Checking update status at: {Url}", url);
+            
+            var response = await _httpClient.GetAsync(url);
+            _logger.LogDebug("Update status response: {StatusCode}", response.StatusCode);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                _logger.LogDebug("Update status response body: {Content}", content);
+                
+                var result = await response.Content.ReadFromJsonAsync<UpdateStatusResponse>(_jsonOptions);
+                _logger.LogDebug("Parsed pendingUpdate value: {PendingUpdate}", result?.PendingUpdate);
+                return result?.PendingUpdate ?? false;
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogDebug("Orchestrator {OrchestratorId} not found in API", orchestratorId);
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to check for update");
+            return false;
+        }
+    }
+
+    public async Task AcknowledgeUpdateAsync(string orchestratorId)
+    {
+        try
+        {
+            if (!await EnsureAuthenticatedAsync())
+            {
+                return;
+            }
+
+            await _httpClient.PostAsync($"/api/orchestrators/{Uri.EscapeDataString(orchestratorId)}/update-ack", null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to acknowledge update");
+        }
+    }
+}
+
+public class UpdateStatusResponse
+{
+    [System.Text.Json.Serialization.JsonPropertyName("pendingUpdate")]
+    public bool PendingUpdate { get; set; }
 }

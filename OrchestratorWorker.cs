@@ -8,8 +8,8 @@ public class OrchestratorWorker : BackgroundService
     private readonly ILogger<OrchestratorWorker> _logger;
     private readonly IApiClient _apiClient;
     private readonly IContainerExecutor _containerExecutor;
-    private readonly IJobScheduler _jobScheduler;
     private readonly IConfiguration _configuration;
+    private readonly IHostApplicationLifetime _lifetime;
     private readonly HashSet<Guid> _processedOneOffJobs = new();
     private readonly string? _customerName;
     private readonly string _orchestratorId;
@@ -19,14 +19,14 @@ public class OrchestratorWorker : BackgroundService
         ILogger<OrchestratorWorker> logger,
         IApiClient apiClient,
         IContainerExecutor containerExecutor,
-        IJobScheduler jobScheduler,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostApplicationLifetime lifetime)
     {
         _logger = logger;
         _apiClient = apiClient;
         _containerExecutor = containerExecutor;
-        _jobScheduler = jobScheduler;
         _configuration = configuration;
+        _lifetime = lifetime;
         _customerName = configuration["CustomerSettings:CustomerName"];
         _hostName = Environment.MachineName;
         _orchestratorId = $"{_hostName}-{Guid.NewGuid().ToString()[..8]}";
@@ -50,6 +50,15 @@ public class OrchestratorWorker : BackgroundService
                 // Send heartbeat
                 await SendHeartbeatAsync();
                 
+                // Check for update request
+                if (await CheckForUpdateAsync())
+                {
+                    _logger.LogInformation("Update requested - orchestrator will exit to allow restart");
+                    // Request graceful application shutdown - container platform will restart us
+                    _lifetime.StopApplication();
+                    return;
+                }
+                
                 // Process jobs
                 await ProcessJobsAsync(stoppingToken);
 
@@ -68,6 +77,29 @@ public class OrchestratorWorker : BackgroundService
         }
 
         _logger.LogInformation("Orchestrator Worker stopping...");
+    }
+
+    private async Task<bool> CheckForUpdateAsync()
+    {
+        try
+        {
+            _logger.LogDebug("Checking for updates for orchestrator {OrchestratorId}...", _orchestratorId);
+            var pendingUpdate = await _apiClient.CheckForUpdateAsync(_orchestratorId);
+            _logger.LogDebug("Update check result for {OrchestratorId}: pendingUpdate={PendingUpdate}", _orchestratorId, pendingUpdate);
+            
+            if (pendingUpdate)
+            {
+                _logger.LogInformation("Pending update detected for orchestrator {OrchestratorId}", _orchestratorId);
+                await _apiClient.AcknowledgeUpdateAsync(_orchestratorId);
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to check for updates for orchestrator {OrchestratorId}", _orchestratorId);
+            return false;
+        }
     }
 
     private async Task SendHeartbeatAsync()
@@ -126,34 +158,15 @@ public class OrchestratorWorker : BackgroundService
             // Log a nice banner with job details
             LogJobReceivedBanner(job);
             
-            if (job.JobType == JobType.Scheduled)
+            // All jobs are treated as one-off executions
+            // The API is responsible for scheduling and resetting jobs to Pending when they should run
+            if (!_processedOneOffJobs.Contains(job.Id))
             {
-                // Handle scheduled jobs
-                if (!_jobScheduler.IsJobScheduled(job.Id))
-                {
-                    _logger.LogInformation("Scheduling job {JobId} ({JobName}) with schedule: {Schedule}", 
-                        job.Id, job.Name, job.Schedule);
-                    
-                    _jobScheduler.ScheduleJob(job, async () => await ExecuteJobAsync(job));
-                    
-                    await SendLogAsync(job.Id, $"Job scheduled with cron expression: {job.Schedule}", Models.LogLevel.Info);
-                }
-                else if (job.IsPaused)
-                {
-                    _logger.LogDebug("Job {JobId} is paused", job.Id);
-                }
-            }
-            else // OneOff
-            {
-                // Execute one-off jobs immediately (only once)
-                if (!_processedOneOffJobs.Contains(job.Id))
-                {
-                    _processedOneOffJobs.Add(job.Id);
-                    _logger.LogInformation("Executing one-off job {JobId} ({JobName})", job.Id, job.Name);
-                    
-                    // Execute in background so we don't block polling
-                    _ = Task.Run(async () => await ExecuteJobAsync(job), stoppingToken);
-                }
+                _processedOneOffJobs.Add(job.Id);
+                _logger.LogInformation("Executing job {JobId} ({JobName})", job.Id, job.Name);
+                
+                // Execute in background so we don't block polling
+                _ = Task.Run(async () => await ExecuteJobAsync(job), stoppingToken);
             }
         }
         catch (Exception ex)
