@@ -5,11 +5,12 @@ using System.Text;
 
 namespace IamOrchestrator.Services;
 
-public class ContainerExecutor : IContainerExecutor
+public class ContainerExecutor : IContainerExecutor, IDisposable
 {
     private readonly ILogger<ContainerExecutor> _logger;
     private readonly IConfiguration _configuration;
     private readonly DockerClient _dockerClient;
+    private bool _disposed;
 
     public ContainerExecutor(ILogger<ContainerExecutor> logger, IConfiguration configuration)
     {
@@ -18,6 +19,16 @@ public class ContainerExecutor : IContainerExecutor
         
         var dockerEndpoint = configuration["ContainerSettings:DockerEndpoint"] ?? "npipe://./pipe/docker_engine";
         _dockerClient = new DockerClientConfiguration(new Uri(dockerEndpoint)).CreateClient();
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            _dockerClient?.Dispose();
+            _disposed = true;
+            GC.SuppressFinalize(this);
+        }
     }
 
     public async Task<bool> ExecuteJobAsync(
@@ -160,10 +171,17 @@ public class ContainerExecutor : IContainerExecutor
                     fullImageName, ex.GetType().Name);
                 await orchestratorLogCallback($"ERROR: Failed to pull image: {ex.Message}");
                 
-                if (ex.Message.Contains("unauthorized") || ex.Message.Contains("UNAUTHORIZED"))
+                // Check for authentication errors
+                var isAuthError = ex.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase) || 
+                                  ex.Message.Contains("UNAUTHORIZED") ||
+                                  ex.Message.Contains("authentication required", StringComparison.OrdinalIgnoreCase);
+                
+                if (isAuthError)
                 {
                     _logger.LogError("Authentication failed! Credentials may be incorrect or expired.");
-                    await orchestratorLogCallback("AUTHENTICATION FAILED - Check registry username and password");
+                    await orchestratorLogCallback("AUTHENTICATION FAILED - Credentials may be expired, will attempt to refresh");
+                    throw new RegistryAuthenticationException(
+                        $"Registry authentication failed for image '{fullImageName}'. Credentials may be expired.", ex);
                 }
                 
                 // Check if image exists locally using the full image name

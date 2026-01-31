@@ -5,26 +5,38 @@ using IamOrchestrator.Models;
 
 namespace IamOrchestrator.Services;
 
-public class ApiClient : IApiClient
+public class ApiClient : IApiClient, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<ApiClient> _logger;
     private readonly IConfiguration _configuration;
-    private readonly JsonSerializerOptions _jsonOptions;
     private string? _authToken;
     private DateTime _tokenExpiration = DateTime.MinValue;
     private readonly SemaphoreSlim _authLock = new(1, 1);
+    private bool _disposed;
+
+    // Static JsonSerializerOptions - thread-safe and expensive to create
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
 
     public ApiClient(HttpClient httpClient, ILogger<ApiClient> logger, IConfiguration configuration)
     {
         _httpClient = httpClient;
         _logger = logger;
         _configuration = configuration;
-        _jsonOptions = new JsonSerializerOptions
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
         {
-            PropertyNameCaseInsensitive = true,
-            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-        };
+            _authLock?.Dispose();
+            _disposed = true;
+            GC.SuppressFinalize(this);
+        }
     }
 
     private async Task<bool> EnsureAuthenticatedAsync()
@@ -55,7 +67,7 @@ public class ApiClient : IApiClient
                 Password = password
             };
 
-            var response = await _httpClient.PostAsJsonAsync("/api/auth/login", loginRequest, _jsonOptions);
+            var response = await _httpClient.PostAsJsonAsync("/api/auth/login", loginRequest, s_jsonOptions);
             
             if (!response.IsSuccessStatusCode)
             {
@@ -63,7 +75,7 @@ public class ApiClient : IApiClient
                 return false;
             }
 
-            var loginResponse = await response.Content.ReadFromJsonAsync<LoginResponse>(_jsonOptions);
+            var loginResponse = await response.Content.ReadFromJsonAsync<LoginResponse>(s_jsonOptions);
             
             if (loginResponse == null || string.IsNullOrEmpty(loginResponse.Token))
             {
@@ -118,7 +130,7 @@ public class ApiClient : IApiClient
             
             response.EnsureSuccessStatusCode();
             
-            var jobs = await response.Content.ReadFromJsonAsync<List<Job>>(_jsonOptions);
+            var jobs = await response.Content.ReadFromJsonAsync<List<Job>>(s_jsonOptions);
             return jobs ?? new List<Job>();
         }
         catch (Exception ex)
@@ -155,7 +167,7 @@ public class ApiClient : IApiClient
                 return null;
             }
             
-            return await response.Content.ReadFromJsonAsync<Job>(_jsonOptions);
+            return await response.Content.ReadFromJsonAsync<Job>(s_jsonOptions);
         }
         catch (Exception ex)
         {
@@ -174,7 +186,7 @@ public class ApiClient : IApiClient
                 return false;
             }
 
-            var response = await _httpClient.PatchAsJsonAsync($"/api/jobs/{jobId}/status", status, _jsonOptions);
+            var response = await _httpClient.PatchAsJsonAsync($"/api/jobs/{jobId}/status", status, s_jsonOptions);
             
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -182,7 +194,7 @@ public class ApiClient : IApiClient
                 _authToken = null;
                 if (await EnsureAuthenticatedAsync())
                 {
-                    response = await _httpClient.PatchAsJsonAsync($"/api/jobs/{jobId}/status", status, _jsonOptions);
+                    response = await _httpClient.PatchAsJsonAsync($"/api/jobs/{jobId}/status", status, s_jsonOptions);
                 }
             }
             
@@ -205,7 +217,7 @@ public class ApiClient : IApiClient
                 return false;
             }
 
-            var response = await _httpClient.PostAsJsonAsync("/api/logs", logEntry, _jsonOptions);
+            var response = await _httpClient.PostAsJsonAsync("/api/logs", logEntry, s_jsonOptions);
             
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -213,7 +225,7 @@ public class ApiClient : IApiClient
                 _authToken = null;
                 if (await EnsureAuthenticatedAsync())
                 {
-                    response = await _httpClient.PostAsJsonAsync("/api/logs", logEntry, _jsonOptions);
+                    response = await _httpClient.PostAsJsonAsync("/api/logs", logEntry, s_jsonOptions);
                 }
             }
             
@@ -236,7 +248,7 @@ public class ApiClient : IApiClient
                 return;
             }
 
-            var response = await _httpClient.PostAsJsonAsync("/api/orchestrators/heartbeat", orchestrator, _jsonOptions);
+            var response = await _httpClient.PostAsJsonAsync("/api/orchestrators/heartbeat", orchestrator, s_jsonOptions);
             
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -244,7 +256,7 @@ public class ApiClient : IApiClient
                 _authToken = null;
                 if (await EnsureAuthenticatedAsync())
                 {
-                    response = await _httpClient.PostAsJsonAsync("/api/orchestrators/heartbeat", orchestrator, _jsonOptions);
+                    response = await _httpClient.PostAsJsonAsync("/api/orchestrators/heartbeat", orchestrator, s_jsonOptions);
                 }
             }
             
@@ -286,7 +298,7 @@ public class ApiClient : IApiClient
                 return null;
             }
 
-            return await response.Content.ReadFromJsonAsync<CertificateResponse>(_jsonOptions);
+            return await response.Content.ReadFromJsonAsync<CertificateResponse>(s_jsonOptions);
         }
         catch (Exception ex)
         {
@@ -316,7 +328,7 @@ public class ApiClient : IApiClient
                 var content = await response.Content.ReadAsStringAsync();
                 _logger.LogDebug("Update status response body: {Content}", content);
                 
-                var result = await response.Content.ReadFromJsonAsync<UpdateStatusResponse>(_jsonOptions);
+                var result = await response.Content.ReadFromJsonAsync<UpdateStatusResponse>(s_jsonOptions);
                 _logger.LogDebug("Parsed pendingUpdate value: {PendingUpdate}", result?.PendingUpdate);
                 return result?.PendingUpdate ?? false;
             }
@@ -348,6 +360,52 @@ public class ApiClient : IApiClient
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to acknowledge update");
+        }
+    }
+
+    public async Task<Job?> RefreshCredentialsAsync(Guid jobId)
+    {
+        try
+        {
+            if (!await EnsureAuthenticatedAsync())
+            {
+                _logger.LogWarning("Cannot refresh credentials: Not authenticated");
+                return null;
+            }
+
+            _logger.LogInformation("Requesting credential refresh for job {JobId}", jobId);
+            
+            var response = await _httpClient.PostAsync($"/api/jobs/{jobId}/refresh-credentials", null);
+            
+            // Retry authentication if we get 401
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _logger.LogWarning("Received 401, re-authenticating...");
+                _authToken = null;
+                if (await EnsureAuthenticatedAsync())
+                {
+                    response = await _httpClient.PostAsync($"/api/jobs/{jobId}/refresh-credentials", null);
+                }
+            }
+
+            if (response.IsSuccessStatusCode)
+            {
+                var job = await response.Content.ReadFromJsonAsync<Job>(s_jsonOptions);
+                _logger.LogInformation("Successfully refreshed credentials for job {JobId}", jobId);
+                return job;
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("Failed to refresh credentials for job {JobId}: {StatusCode} - {Error}", 
+                    jobId, response.StatusCode, error);
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Exception while refreshing credentials for job {JobId}", jobId);
+            return null;
         }
     }
 }

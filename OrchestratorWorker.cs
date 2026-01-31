@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using IamOrchestrator.Models;
 using IamOrchestrator.Services;
 
@@ -10,7 +11,11 @@ public class OrchestratorWorker : BackgroundService
     private readonly IContainerExecutor _containerExecutor;
     private readonly IConfiguration _configuration;
     private readonly IHostApplicationLifetime _lifetime;
-    private readonly HashSet<Guid> _processedOneOffJobs = new();
+    
+    // Thread-safe dictionary tracking processed jobs with timestamp for cleanup
+    private readonly ConcurrentDictionary<Guid, DateTime> _processedOneOffJobs = new();
+    private const int MaxProcessedJobsToKeep = 1000;
+    
     private readonly string? _customerName;
     private readonly string _orchestratorId;
     private readonly string _hostName;
@@ -30,17 +35,39 @@ public class OrchestratorWorker : BackgroundService
         _customerName = configuration["CustomerSettings:CustomerName"];
         _hostName = Environment.MachineName;
         _orchestratorId = $"{_hostName}-{Guid.NewGuid().ToString()[..8]}";
-        
-        if (string.IsNullOrEmpty(_customerName))
-        {
-            throw new InvalidOperationException("CustomerSettings:CustomerName is required. Each orchestrator must handle a specific customer.");
-        }
-        
-        _logger.LogInformation("Orchestrator {OrchestratorId} configured for customer: {CustomerName}", _orchestratorId, _customerName);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Validate customer name at startup with graceful error handling
+        if (string.IsNullOrEmpty(_customerName))
+        {
+            _logger.LogCritical("");
+            _logger.LogCritical("╔══════════════════════════════════════════════════════════════════╗");
+            _logger.LogCritical("║  ❌ CONFIGURATION ERROR                                          ║");
+            _logger.LogCritical("╠══════════════════════════════════════════════════════════════════╣");
+            _logger.LogCritical("║  CustomerSettings:CustomerName is required.                      ║");
+            _logger.LogCritical("║  Each orchestrator must handle a specific customer.              ║");
+            _logger.LogCritical("║                                                                  ║");
+            _logger.LogCritical("║  Please set the customer name in one of the following ways:      ║");
+            _logger.LogCritical("║                                                                  ║");
+            _logger.LogCritical("║  1. In appsettings.json:                                         ║");
+            _logger.LogCritical("║     \"CustomerSettings\": {{ \"CustomerName\": \"your-customer\" }}     ║");
+            _logger.LogCritical("║                                                                  ║");
+            _logger.LogCritical("║  2. Via environment variable:                                    ║");
+            _logger.LogCritical("║     CustomerSettings__CustomerName=your-customer                 ║");
+            _logger.LogCritical("║                                                                  ║");
+            _logger.LogCritical("║  3. Via command line:                                            ║");
+            _logger.LogCritical("║     dotnet run -- --CustomerSettings:CustomerName=your-customer  ║");
+            _logger.LogCritical("╚══════════════════════════════════════════════════════════════════╝");
+            _logger.LogCritical("");
+            
+            // Stop the application gracefully
+            _lifetime.StopApplication();
+            return;
+        }
+        
+        _logger.LogInformation("Orchestrator {OrchestratorId} configured for customer: {CustomerName}", _orchestratorId, _customerName);
         _logger.LogInformation("Orchestrator Worker started at: {time}", DateTimeOffset.Now);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -160,19 +187,66 @@ public class OrchestratorWorker : BackgroundService
             
             // All jobs are treated as one-off executions
             // The API is responsible for scheduling and resetting jobs to Pending when they should run
-            if (!_processedOneOffJobs.Contains(job.Id))
+            if (_processedOneOffJobs.TryAdd(job.Id, DateTime.UtcNow))
             {
-                _processedOneOffJobs.Add(job.Id);
                 _logger.LogInformation("Executing job {JobId} ({JobName})", job.Id, job.Name);
                 
+                // Cleanup old entries to prevent unbounded growth
+                CleanupProcessedJobsCache();
+                
                 // Execute in background so we don't block polling
-                _ = Task.Run(async () => await ExecuteJobAsync(job), stoppingToken);
+                // Wrap in try-catch to prevent silent exception swallowing
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await ExecuteJobAsync(job);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Background execution failed for job {JobId}", job.Id);
+                    }
+                }, stoppingToken);
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error processing job {JobId}", job.Id);
             await SendLogAsync(job.Id, $"Error processing job: {ex.Message}", Models.LogLevel.Error);
+        }
+    }
+
+    private void CleanupProcessedJobsCache()
+    {
+        // Only cleanup if we exceed the max
+        if (_processedOneOffJobs.Count <= MaxProcessedJobsToKeep)
+            return;
+        
+        // Remove oldest entries (older than 24 hours or if over limit)
+        var cutoff = DateTime.UtcNow.AddHours(-24);
+        var keysToRemove = _processedOneOffJobs
+            .Where(kvp => kvp.Value < cutoff)
+            .Select(kvp => kvp.Key)
+            .ToList();
+        
+        foreach (var key in keysToRemove)
+        {
+            _processedOneOffJobs.TryRemove(key, out _);
+        }
+        
+        // If still over limit, remove oldest
+        if (_processedOneOffJobs.Count > MaxProcessedJobsToKeep)
+        {
+            var excessKeys = _processedOneOffJobs
+                .OrderBy(kvp => kvp.Value)
+                .Take(_processedOneOffJobs.Count - MaxProcessedJobsToKeep)
+                .Select(kvp => kvp.Key)
+                .ToList();
+            
+            foreach (var key in excessKeys)
+            {
+                _processedOneOffJobs.TryRemove(key, out _);
+            }
         }
     }
 
@@ -215,13 +289,8 @@ public class OrchestratorWorker : BackgroundService
                 }
             }
 
-            // Execute the container with certificate
-            var success = await _containerExecutor.ExecuteJobAsync(
-                job, 
-                async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "orchestrator"),
-                async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "container"),
-                certificatePfx,
-                certificatePassword);
+            // Execute the container with certificate, with retry on auth failure
+            var success = await ExecuteJobWithCredentialRetryAsync(job, certificatePfx, certificatePassword);
 
             // Update final status
             var finalStatus = success ? JobStatus.Completed : JobStatus.Failed;
@@ -246,6 +315,51 @@ public class OrchestratorWorker : BackgroundService
             _logger.LogError(ex, "Error executing job {JobId}", job.Id);
             await _apiClient.UpdateJobStatusAsync(job.Id, JobStatus.Failed);
             await SendLogAsync(job.Id, $"Job execution failed: {ex.Message}", Models.LogLevel.Error);
+        }
+    }
+
+    private async Task<bool> ExecuteJobWithCredentialRetryAsync(Job job, byte[]? certificatePfx, string? certificatePassword)
+    {
+        try
+        {
+            return await _containerExecutor.ExecuteJobAsync(
+                job, 
+                async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "orchestrator"),
+                async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "container"),
+                certificatePfx,
+                certificatePassword);
+        }
+        catch (RegistryAuthenticationException authEx)
+        {
+            _logger.LogWarning(authEx, "Registry authentication failed for job {JobId}. Attempting to refresh credentials...", job.Id);
+            await SendLogAsync(job.Id, "Registry authentication failed. Requesting credential refresh from API...", Models.LogLevel.Warning);
+            
+            // Request credential refresh from API
+            var refreshedJob = await _apiClient.RefreshCredentialsAsync(job.Id);
+            
+            if (refreshedJob == null)
+            {
+                _logger.LogError("Failed to refresh credentials for job {JobId}", job.Id);
+                await SendLogAsync(job.Id, "Failed to refresh credentials. Cannot retry.", Models.LogLevel.Error);
+                throw;
+            }
+            
+            _logger.LogInformation("Credentials refreshed for job {JobId}. Retrying with new credentials (username: {Username})", 
+                job.Id, refreshedJob.RegistryUsername);
+            await SendLogAsync(job.Id, $"Credentials refreshed. Retrying with new token: {refreshedJob.RegistryUsername}", Models.LogLevel.Info);
+            
+            // Update the job object with refreshed credentials
+            job.RegistryServer = refreshedJob.RegistryServer;
+            job.RegistryUsername = refreshedJob.RegistryUsername;
+            job.RegistryPassword = refreshedJob.RegistryPassword;
+            
+            // Retry once with new credentials
+            return await _containerExecutor.ExecuteJobAsync(
+                job, 
+                async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "orchestrator"),
+                async (logMessage) => await SendLogAsync(job.Id, logMessage, Models.LogLevel.Info, "container"),
+                certificatePfx,
+                certificatePassword);
         }
     }
 
@@ -278,43 +392,45 @@ public class OrchestratorWorker : BackgroundService
     private void LogJobReceivedBanner(Job job)
     {
         var separator = new string('═', 60);
-        var jobTypeIcon = job.JobType == JobType.Scheduled ? "🔄" : "▶️";
+        var jobTypeIcon = job.JobType == JobType.Scheduled ? "[SCHEDULED]" : "[ONE-OFF]";
         var whatIfIndicator = job.IsWhatIf ? " [WHAT-IF]" : "";
         var pausedIndicator = job.IsPaused ? " [PAUSED]" : "";
         
-        _logger.LogInformation("");
-        _logger.LogInformation("╔{Separator}╗", separator);
-        _logger.LogInformation("║  {Icon} JOB RECEIVED{WhatIf}{Paused}", jobTypeIcon, whatIfIndicator, pausedIndicator);
-        _logger.LogInformation("╠{Separator}╣", separator);
-        _logger.LogInformation("║  📋 Name:       {Name}", job.Name);
-        _logger.LogInformation("║  🔑 ID:         {Id}", job.Id);
-        _logger.LogInformation("║  👤 Customer:   {Customer}", job.Customer);
-        _logger.LogInformation("║  📦 Type:       {JobType}", job.JobType);
+        var banner = new System.Text.StringBuilder();
+        banner.AppendLine();
+        banner.AppendLine($"╔{separator}╗");
+        banner.AppendLine($"║  {jobTypeIcon} JOB RECEIVED{whatIfIndicator}{pausedIndicator}");
+        banner.AppendLine($"╠{separator}╣");
+        banner.AppendLine($"║  Name:       {job.Name}");
+        banner.AppendLine($"║  ID:         {job.Id}");
+        banner.AppendLine($"║  Customer:   {job.Customer}");
+        banner.AppendLine($"║  Type:       {job.JobType}");
         
         if (job.JobType == JobType.Scheduled && !string.IsNullOrEmpty(job.Schedule))
         {
-            _logger.LogInformation("║  ⏰ Schedule:   {Schedule}", job.Schedule);
+            banner.AppendLine($"║  Schedule:   {job.Schedule}");
         }
         
         if (!string.IsNullOrEmpty(job.ScriptPath))
         {
-            _logger.LogInformation("║  📜 Script:     {ScriptPath}", job.ScriptPath);
+            banner.AppendLine($"║  Script:     {job.ScriptPath}");
         }
         
         if (!string.IsNullOrEmpty(job.ContainerImage))
         {
-            _logger.LogInformation("║  🐳 Image:      {ContainerImage}", job.ContainerImage);
+            banner.AppendLine($"║  Image:      {job.ContainerImage}");
         }
         
         if (job.Parameters.Any())
         {
-            _logger.LogInformation("║  ⚙️  Parameters: {Count} defined", job.Parameters.Count);
+            banner.AppendLine($"║  Parameters: {job.Parameters.Count} defined");
         }
         
-        _logger.LogInformation("║  📅 Created:    {CreatedAt:yyyy-MM-dd HH:mm:ss} UTC", job.CreatedAt);
-        _logger.LogInformation("║  🎯 Status:     {Status}", job.Status);
-        _logger.LogInformation("║  🖥️  Assigned:   {OrchestratorId}", _orchestratorId);
-        _logger.LogInformation("╚{Separator}╝", separator);
-        _logger.LogInformation("");
+        banner.AppendLine($"║  Created:    {job.CreatedAt:yyyy-MM-dd HH:mm:ss} UTC");
+        banner.AppendLine($"║  Status:     {job.Status}");
+        banner.AppendLine($"║  Assigned:   {_orchestratorId}");
+        banner.AppendLine($"╚{separator}╝");
+        
+        _logger.LogInformation("{JobBanner}", banner.ToString());
     }
 }

@@ -12,4 +12,5 @@ public interface IApiClient
     Task<CertificateResponse?> GetCertificateAsync(string customerName);
     Task<bool> CheckForUpdateAsync(string orchestratorId);
     Task AcknowledgeUpdateAsync(string orchestratorId);
+    Task<Job?> RefreshCredentialsAsync(Guid jobId);
 }
