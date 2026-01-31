@@ -256,9 +256,42 @@ public sealed class OrchestratorWorker : BackgroundService
         {
             _logger.LogDebug("Starting execution of job {JobId} ({JobName})", job.Id, job.Name);
             
-            // Update status to Running
+            // Update status to Running - this may regenerate ACR credentials on the API side
             await _apiClient.UpdateJobStatusAsync(job.Id, JobStatus.Running);
             await SendLogAsync(job.Id, $"Job execution started", Models.LogLevel.Info);
+
+            // Refresh the job to get updated ACR credentials (may have been regenerated for retried/scheduled jobs)
+            // Check if we have a registry server or ACR image but missing credentials - this indicates we need to fetch fresh creds
+            var needsCredentialRefresh = (string.IsNullOrEmpty(job.RegistryUsername) || string.IsNullOrEmpty(job.RegistryPassword)) &&
+                (!string.IsNullOrEmpty(job.RegistryServer) || 
+                 (!string.IsNullOrEmpty(job.ContainerImage) && job.ContainerImage.Contains(".azurecr.io", StringComparison.OrdinalIgnoreCase)));
+            
+            if (needsCredentialRefresh)
+            {
+                _logger.LogInformation("Job {JobId} uses private registry but has missing credentials - refreshing job to get updated credentials", job.Id);
+                var refreshedJob = await _apiClient.GetJobAsync(job.Id);
+                if (refreshedJob != null)
+                {
+                    // Update credential fields from refreshed job
+                    job.RegistryUsername = refreshedJob.RegistryUsername;
+                    job.RegistryPassword = refreshedJob.RegistryPassword;
+                    job.RegistryServer = refreshedJob.RegistryServer;
+                    
+                    if (!string.IsNullOrEmpty(job.RegistryUsername))
+                    {
+                        _logger.LogInformation("Refreshed ACR credentials for job {JobId}: username={Username}", job.Id, job.RegistryUsername);
+                        await SendLogAsync(job.Id, $"ACR credentials refreshed: {job.RegistryUsername}", Models.LogLevel.Info);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Job {JobId} still has no ACR credentials after refresh", job.Id);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to refresh job {JobId} to get updated credentials", job.Id);
+                }
+            }
 
             // Download certificate for customer if customer is specified
             byte[]? certificatePfx = null;
